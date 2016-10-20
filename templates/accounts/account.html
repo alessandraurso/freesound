@@ -7,7 +7,52 @@
 
 {% block head %}
     {{ block.super }}
-    <script type="text/javascript" src="//maps.googleapis.com/maps/api/js?v=3&key={{ GOOGLE_API_KEY }}&sensor=false"></script>
+    <link rel="stylesheet" href="https://openlayers.org/en/v3.18.2/css/ol.css" type="text/css">
+<style>
+      .ol-popup {
+        position: absolute;
+        background-color: white;
+        -webkit-filter: drop-shadow(0 1px 4px rgba(0,0,0,0.2));
+        filter: drop-shadow(0 1px 4px rgba(0,0,0,0.2));
+        padding: 15px;
+        border-radius: 10px;
+        border: 1px solid #cccccc;
+        bottom: 12px;
+        left: -50px;
+        min-width: 280px;
+      }
+      .ol-popup:after, .ol-popup:before {
+        top: 100%;
+        border: solid transparent;
+        content: " ";
+        height: 0;
+        width: 0;
+        position: absolute;
+        pointer-events: none;
+      }
+      .ol-popup:after {
+        border-top-color: white;
+        border-width: 10px;
+        left: 48px;
+        margin-left: -10px;
+      }
+      .ol-popup:before {
+        border-top-color: #cccccc;
+        border-width: 11px;
+        left: 48px;
+        margin-left: -11px;
+      }
+      .ol-popup-closer {
+        text-decoration: none;
+        position: absolute;
+        top: 2px;
+        right: 8px;
+      }
+      .ol-popup-closer:after {
+        content: "✖";
+      }
+    </style>
+    <script src="https://openlayers.org/en/v3.18.2/build/ol.js"></script>
 {% endblock head %}
 
 {% block tab_home_active %}{% if home %}active_tab{% endif %}{% endblock %}
@@ -309,63 +354,107 @@
     <div id="latest_geotags" class="content_box">
         <h3>{% if home %}Your{% else %}{{ user.username }}'s{% endif %} latest geotags</h3>
         <div id="map_canvas"></div>
+        <div id="map-popup" class="ol-popup">
+          <a href="#" id="map-popup-closer" class="ol-popup-closer"></a>
+          <div id="map-popup-content"></div>
+        </div>
         <script type="text/javascript">
-            var map = new google.maps.Map(
-                document.getElementById('map_canvas'), {
-                  center: new google.maps.LatLng(24, 22),
-                  zoom: 2,
-                  mapTypeId: google.maps.MapTypeId.SATELLITE,
-                  scrollwheel: false,
-                  streetViewControl: false,
+           var container = document.getElementById('map-popup');
+           var content = document.getElementById('map-popup-content');
+           var closer = document.getElementById('map-popup-closer');
+
+            var vectorSource = new ol.source.Vector({
+                  //create empty vector
             });
-            var infowindow = new google.maps.InfoWindow();
-            google.maps.event.addListener(infowindow, 'closeclick', function() {
-                stopAll();
-            });
+            var nSounds = 0;
 
             ajaxLoad('{% url "geotags-for-user-latest-json" user.username %}', function(data, responseCode)
             {
-                var bounds = new google.maps.LatLngBounds();
-                var nSounds = 0;
-                var lastPoint;
-
                 $.each($.parseJSON(data.response), function(index, item)
                 {
-                    nSounds = nSounds + 1;
                     var id = item[0];
                     var lat = item[1];
                     var lon = item[2];
+                    nSounds = nSounds + 1;
 
-                    var point = new google.maps.LatLng(lat, lon);
-                    lastPoint = point;
-                    bounds.extend(point);
-                    var marker = new google.maps.Marker({'position': point, 'map': map});
+                    var iconFeature = new ol.Feature({
+                      geometry: new ol.geom.Point(ol.proj.transform([lon, lat], 'EPSG:4326','EPSG:3857')),
+                      //name: 'Null Island ' + i,
+                      //population: 4000,
+                      //rainfall: 500
+                      fsId: id});
+                    vectorSource.addFeature(iconFeature);
+              });
 
-                    google.maps.event.addListener(marker, 'click', function()
-                    {
-                        stopAll();
-                        ajaxLoad( '/geotags/infowindow/' + id, function(data, responseCode)
-                        {
-                            infowindow.setContent(data.response);
-                            infowindow.open(map, marker);
-                            setTimeout(function() {
-                                makePlayer('.infowindow_player .player');
-                            }, 500);
-                        });
-                    });
-                });
 
-                // Show map div if sounds in it
+              // Show map div if sounds in it
                 if (nSounds > 0) {
-                    $("#latest_geotags").show();
-                    google.maps.event.trigger(map, 'resize');
-                }
+                  $("#latest_geotags").show();
+                  //google.maps.event.trigger(map, 'resize');
+              }
 
-                if (nSounds > 1){
-                    if (!bounds.isEmpty()) map.fitBounds(bounds);
-                }else{
-                    map.setCenter(lastPoint, 4); // Center the map in the geotag
+              //create the style
+              var iconStyle = new ol.style.Style({
+                image: new ol.style.Icon(/** @type {olx.style.IconOptions} */ ({
+                  anchor: [0.5, 46],
+                  anchorXUnits: 'fraction',
+                  anchorYUnits: 'pixels',
+                  opacity: 0.75,
+                  src: 'https://www.pragueeventscalendar.com/src/templates/images/web/marker_icon.png'
+                }))
+              });
+
+
+
+              //add the feature vector to the layer vector, and apply a style to whole layer
+              var vectorLayer = new ol.layer.Vector({
+                source: vectorSource,
+                style: iconStyle
+              });
+
+              var overlay = new ol.Overlay(/** @type {olx.OverlayOptions} */ ({
+                element: container,
+                autoPan: true,
+                autoPanAnimation: {
+                  duration: 250
                 }
+              }));
+
+              closer.onclick = function() {
+                overlay.setPosition(undefined);
+                closer.blur();
+                return false;
+              };
+
+              var map = new ol.Map({
+                layers: [new ol.layer.Tile({ source: new ol.source.OSM() }), vectorLayer],
+                target: document.getElementById('map_canvas'),
+                interactions: ol.interaction.defaults({mouseWheelZoom:false}),
+                overlays: [overlay],
+                view: new ol.View({
+                  center: [0, 0],
+                  zoom: 3
+                })
+              });
+              if (vectorLayer.getSource().getFeatures().length > 0) {
+                map.getView().fit(vectorSource.getExtent(), map.getSize());
+              }
+
+
+
+              map.on("click", function(e) {
+                    map.forEachFeatureAtPixel(e.pixel, function (feature, layer) {
+                            //do something
+                        stopAll();
+                        ajaxLoad( '/geotags/infowindow/' + feature.get('fsId'), function(data, responseCode){
+                          content.innerHTML = data.response;                         
+                          overlay.setPosition(e.coordinate);
+                          setTimeout(function() {
+                              makePlayer('.infowindow_player .player');
+                          }, 500);
+                      });
+                    })
+              });
             });
         </script>
         <p><a href="{% url "geotags-for-user" user.username %}">more...</a></p>
